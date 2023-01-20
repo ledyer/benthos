@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -288,6 +289,7 @@ func (s *sftpReader) getFilePaths(ctx context.Context) ([]string, error) {
 			}
 			filepaths = append(filepaths, paths...)
 		}
+		sort.Strings(filepaths)
 		return filepaths, nil
 	}
 
@@ -318,5 +320,6 @@ func (s *sftpReader) getFilePaths(ctx context.Context) ([]string, error) {
 	}); cerr != nil {
 		return nil, fmt.Errorf("error getting cache in getFilePaths: %v", cerr)
 	}
+	sort.Strings(filepaths)
 	return filepaths, nil
 }

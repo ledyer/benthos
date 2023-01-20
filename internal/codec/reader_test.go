@@ -2,6 +2,7 @@ package codec
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -380,6 +381,23 @@ func TestCSVGzipReader(t *testing.T) {
 
 	testReaderSuite(
 		t, "gzip/csv", "", gzipBuf.Bytes(),
+		`{"col1":"foo1","col2":"bar1","col3":"baz1"}`,
+		`{"col1":"foo2","col2":"bar2","col3":"baz2"}`,
+		`{"col1":"foo3","col2":"bar3","col3":"baz3"}`,
+	)
+}
+
+func TestCSVZipfileReader(t *testing.T) {
+	var zipBuf bytes.Buffer
+	zw := zip.NewWriter(&zipBuf)
+	fzw, err := zw.Create("test.csv")
+	require.NoError(t, err)
+	_, err = fzw.Write([]byte("col1,col2,col3\nfoo1,bar1,baz1\nfoo2,bar2,baz2\nfoo3,bar3,baz3"))
+	require.NoError(t, err)
+	zw.Close()
+
+	testReaderSuite(
+		t, "zipfile/csv", "", zipBuf.Bytes(),
 		`{"col1":"foo1","col2":"bar1","col3":"baz1"}`,
 		`{"col1":"foo2","col2":"bar2","col3":"baz2"}`,
 		`{"col1":"foo3","col2":"bar3","col3":"baz3"}`,
@@ -769,4 +787,27 @@ func TestRegexpSplitReader(t *testing.T) {
 
 	data = []byte("")
 	testReaderSuite(t, "regex:split", "", data)
+}
+
+func TestZipReader(t *testing.T) {
+	input := []string{
+		"first document",
+		"second document",
+		"third document",
+	}
+
+	var zipBuf bytes.Buffer
+	zw := zip.NewWriter(&zipBuf)
+	for i := range input {
+		fzw, err := zw.Create((input[i]))
+		require.NoError(t, err)
+
+		_, err = fzw.Write([]byte(input[i]))
+		require.NoError(t, err)
+
+	}
+	require.NoError(t, zw.Close())
+
+	testReaderSuite(t, "zip", "", zipBuf.Bytes(), input...)
+	testReaderSuite(t, "auto", "foo.zip", zipBuf.Bytes(), input...)
 }

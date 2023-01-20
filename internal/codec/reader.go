@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/krolaw/zipstream"
 	goavro "github.com/linkedin/goavro/v2"
 
 	"github.com/benthosdev/benthos/v4/internal/docs"
@@ -39,6 +40,8 @@ var ReaderDocs = docs.FieldString(
 	"multipart", "Consumes the output of another codec and batches messages together. A batch ends when an empty message is consumed. For example, the codec `lines/multipart` could be used to consume multipart messages where an empty line indicates the end of each batch.",
 	"regex:(?m)^\\d\\d:\\d\\d:\\d\\d", "Consume the file in segments divided by regular expression.",
 	"tar", "Parse the file as a tar archive, and consume each file of the archive as a message.",
+	"zipfile", "Decompress a zip archive with *one* file, this codec should precede another codec, e.g. `zipfile/all-bytes`, `zipfile/tar`, `zipfile/csv`, etc.",
+	"zip", "Parse the file as a zip archive, and consume each file of the archive as a message.",
 )
 
 //------------------------------------------------------------------------------
@@ -193,6 +196,17 @@ func ioReader(codec string, conf ReaderConfig) (ioReaderConstructor, bool) {
 			}
 			return g, nil
 		}, true
+	} else if codec == "zipfile" {
+		return func(_ string, r io.ReadCloser) (io.ReadCloser, error) {
+			g := zipstream.NewReader(r)
+			_, err := g.Next()
+			if err != nil {
+				r.Close()
+				return nil, err
+			}
+			rc := io.NopCloser(g)
+			return rc, nil
+		}, true
 	}
 	return nil, false
 }
@@ -226,6 +240,8 @@ func partReader(codec string, conf ReaderConfig) (ReaderConstructor, bool, error
 		}, true, nil
 	case "tar":
 		return newTarReader, true, nil
+	case "zip":
+		return newZipReader, true, nil
 	}
 
 	if strings.HasPrefix(codec, "avro-ocf:") {
@@ -321,6 +337,8 @@ func autoCodec(conf ReaderConfig) ReaderConstructor {
 			codec = "tar"
 		case ".tgz":
 			codec = "gzip/tar"
+		case ".zip":
+			codec = "zip"
 		}
 		if strings.HasSuffix(path, ".tar.gzip") {
 			codec = "gzip/tar"
@@ -1064,6 +1082,77 @@ func (a *regexReader) Next(ctx context.Context) ([]*message.Part, ReaderAckFn, e
 }
 
 func (a *regexReader) Close(ctx context.Context) error {
+	a.mut.Lock()
+	defer a.mut.Unlock()
+
+	if !a.finished {
+		_ = a.sourceAck(ctx, errors.New("service shutting down"))
+	}
+	if a.pending == 0 {
+		_ = a.sourceAck(ctx, nil)
+	}
+	return a.r.Close()
+}
+
+// ------------------------------------------------------------------------------
+type zipReader struct {
+	buf       *zipstream.Reader
+	r         io.ReadCloser
+	sourceAck ReaderAckFn
+
+	mut      sync.Mutex
+	finished bool
+	pending  int32
+}
+
+func newZipReader(path string, r io.ReadCloser, ackFn ReaderAckFn) (Reader, error) {
+	return &zipReader{
+		buf:       zipstream.NewReader(r),
+		r:         r,
+		sourceAck: ackOnce(ackFn),
+	}, nil
+}
+
+func (a *zipReader) ack(ctx context.Context, err error) error {
+	a.mut.Lock()
+	a.pending--
+	doAck := a.pending == 0 && a.finished
+	a.mut.Unlock()
+
+	if err != nil {
+		return a.sourceAck(ctx, err)
+	}
+	if doAck {
+		return a.sourceAck(ctx, nil)
+	}
+	return nil
+}
+
+func (a *zipReader) Next(ctx context.Context) ([]*message.Part, ReaderAckFn, error) {
+	_, err := a.buf.Next()
+
+	a.mut.Lock()
+	defer a.mut.Unlock()
+
+	if err == nil {
+		fileBuf := bytes.Buffer{}
+		if _, err = fileBuf.ReadFrom(a.buf); err != nil {
+			_ = a.sourceAck(ctx, err)
+			return nil, nil, err
+		}
+		a.pending++
+		return []*message.Part{message.NewPart(fileBuf.Bytes())}, a.ack, nil
+	}
+
+	if errors.Is(err, io.EOF) {
+		a.finished = true
+	} else {
+		_ = a.sourceAck(ctx, err)
+	}
+	return nil, nil, err
+}
+
+func (a *zipReader) Close(ctx context.Context) error {
 	a.mut.Lock()
 	defer a.mut.Unlock()
 
