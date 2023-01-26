@@ -232,7 +232,7 @@ func (s *sftpReader) ReadBatch(ctx context.Context) (message.Batch, input.AsyncA
 			err = component.ErrTimeout
 		}
 		if err != component.ErrTimeout {
-			if s.conf.Watcher.Enabled {
+			if len(s.conf.Watcher.Cache) > 0 {
 				var setErr error
 				if cerr := s.mgr.AccessCache(ctx, s.conf.Watcher.Cache, func(cache cache.V1) {
 					setErr = cache.Set(ctx, s.currentPath, []byte("@"), nil)
