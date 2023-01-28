@@ -178,9 +178,10 @@ func (s *sftpReader) Connect(ctx context.Context) error {
 	}
 
 	if len(s.paths) == 0 {
+		s.client.Close()
+		s.client = nil
+
 		if !s.conf.Watcher.Enabled {
-			s.client.Close()
-			s.client = nil
 			s.log.Debugln("Paths exhausted, closing input")
 			return component.ErrTypeClosed
 		}
@@ -189,6 +190,10 @@ func (s *sftpReader) Connect(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		if s.client, err = s.conf.Credentials.GetClient(s.mgr.FS(), s.conf.Address); err != nil {
+			return err
+		}
+		s.log.Debugln("Finding more paths")
 		s.paths, err = s.getFilePaths(ctx)
 		return err
 	}
